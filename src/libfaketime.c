@@ -205,7 +205,7 @@ static long ft_spawn_secs = -1;
 static long ft_spawn_ncalls = -1;
 
 static int fake_monotonic_clock = 1;
-static int cache_enabled = 1;
+static int cache_enabled = 0;
 static int cache_duration = 10;     /* cache fake time input for 10 seconds */
 
 /*
