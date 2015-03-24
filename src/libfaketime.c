@@ -1482,10 +1482,17 @@ static void parse_ft_string(const char *user_faked_time)
     default:  /* Try and interpret this as a specified time */
       if (ft_mode != FT_NOOP) ft_mode = FT_FREEZE;
       user_faked_time_tm.tm_isdst = -1;
+
+      /* the actual format has a " %f" appended. Parse out the microseconds. */
+      char nanosecond_str[7];
+      memcpy(&nanosecond_str, user_faked_time + 20, 6);
+      nanosecond_str[6] = '\0';
+      int nanoseconds = atoi(nanosecond_str) * 1000;
+
       if (NULL != strptime(user_faked_time, user_faked_time_fmt, &user_faked_time_tm))
       {
         user_faked_time_timespec.tv_sec = mktime(&user_faked_time_tm);
-        user_faked_time_timespec.tv_nsec = 0;
+        user_faked_time_timespec.tv_nsec = nanoseconds;
         user_faked_time_set = true;
       }
       else
