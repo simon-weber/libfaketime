@@ -232,9 +232,6 @@ static bool user_per_tick_inc_set = false;
 
 enum ft_mode_t {FT_FREEZE, FT_START_AT, FT_NOOP} ft_mode = FT_FREEZE;
 
-/* Time to fake is not provided through FAKETIME env. var. */
-static bool parse_config_file = true;
-
 void ft_cleanup (void) __attribute__ ((destructor));
 void ftpl_init (void) __attribute__ ((constructor));
 
@@ -1833,7 +1830,6 @@ void ftpl_init(void)
   /* fake time supplied as environment variable? */
   if (NULL != (tmp_env = getenv("FAKETIME")))
   {
-    parse_config_file = false;
     parse_ft_string(tmp_env);
   }
 }
@@ -1983,37 +1979,6 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
     }
 
     last_data_fetch = tp->tv_sec;
-    /* fake time supplied as environment variable? */
-    if (parse_config_file)
-    {
-      char custom_filename[BUFSIZ];
-      char filename[BUFSIZ];
-      FILE *faketimerc;
-      /* check whether there's a .faketimerc in the user's home directory, or
-       * a system-wide /etc/faketimerc present.
-       * The /etc/faketimerc handling has been contributed by David Burley,
-       * Jacob Moorman, and Wayne Davison of SourceForge, Inc. in version 0.6 */
-      (void) snprintf(custom_filename, BUFSIZ, "%s", getenv("FAKETIME_TIMESTAMP_FILE"));
-      (void) snprintf(filename, BUFSIZ, "%s/.faketimerc", getenv("HOME"));
-      if ((faketimerc = fopen(custom_filename, "rt")) != NULL ||
-          (faketimerc = fopen(filename, "rt")) != NULL ||
-          (faketimerc = fopen("/etc/faketimerc", "rt")) != NULL)
-      {
-        char line[BUFFERLEN];
-        while(fgets(line, BUFFERLEN, faketimerc) != NULL)
-        {
-          if ((strlen(line) > 1) && (line[0] != ' ') &&
-              (line[0] != '#') && (line[0] != ';'))
-          {
-            remove_trailing_eols(line);
-            strncpy(user_faked_time, line, BUFFERLEN-1);
-            user_faked_time[BUFFERLEN-1] = 0;
-            break;
-          }
-        }
-        fclose(faketimerc);
-      }
-    } /* read fake time from file */
     parse_ft_string(user_faked_time);
   } /* cache had expired */
 
