@@ -220,7 +220,6 @@ static char user_faked_time_fmt[BUFSIZ] = {0};
 static struct timespec user_faked_time_timespec = {0, -1};
 /* User supplied base time is set */
 static bool user_faked_time_set = false;
-static char user_faked_time_saved[BUFFERLEN] = {0};
 
 /* Fractional user offset provided through FAKETIME env. var.*/
 static struct timespec user_offset = {0, -1};
@@ -1466,11 +1465,6 @@ static void parse_ft_string(const char *user_faked_time)
   struct tm user_faked_time_tm;
   char * tmp_time_fmt;
 
-  if (!strncmp(user_faked_time, user_faked_time_saved, BUFFERLEN))
-  {
-      /* No change */
-      return;
-  }
 
   /* check whether the user gave us an absolute time to fake */
   switch (user_faked_time[0])
@@ -1494,6 +1488,7 @@ static void parse_ft_string(const char *user_faked_time)
       }
       else
       {
+        printf("Failed to parse FAKETIME timestamp: '%s'", user_faked_time);
         perror("Failed to parse FAKETIME timestamp");
         exit(EXIT_FAILURE);
       }
@@ -1553,11 +1548,6 @@ parse_modifiers:
       break;
   } // end of switch
 
-  strncpy(user_faked_time_saved, user_faked_time, BUFFERLEN-1);
-  user_faked_time_saved[BUFFERLEN-1] = 0;
-#ifdef DEBUG
-  fprintf(stderr, "new FAKETIME: %s\n", user_faked_time_saved);
-#endif
 }
 
 
@@ -1841,23 +1831,6 @@ void ftpl_init(void)
  *      =======================================================================
  */
 
-static void remove_trailing_eols(char *line)
-{
-  char *endp = line + strlen(line);
-  /*
-   * erase the last char if it's a newline
-   * or carriage return, and back up.
-   * keep doing this, but don't back up
-   * past the beginning of the string.
-   */
-# define is_eolchar(c) ((c) == '\n' || (c) == '\r')
-  while (endp > line && is_eolchar(endp[-1]))
-  {
-    *--endp = '\0';
-  }
-}
-
-
 /*
  *      =======================================================================
  *      Implementation of faked functions                        === FAKE(FAKE)
@@ -1867,8 +1840,6 @@ static void remove_trailing_eols(char *line)
 int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
 {
   /* variables used for caching, introduced in version 0.6 */
-  static time_t last_data_fetch = 0;  /* not fetched previously at first call */
-  static int cache_expired = 1;       /* considered expired at first call */
 
   if (dont_fake) return 0;
   /* Per process timers are only sped up or slowed down */
@@ -1942,45 +1913,21 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
     }
   }
 
-  if (last_data_fetch > 0)
+  char user_faked_time[BUFFERLEN];
+  /* initialize with default or env. variable */
+  char *tmp_env;
+
+  if (NULL != (tmp_env = getenv("FAKETIME")))
   {
-    if ((tp->tv_sec - last_data_fetch) > cache_duration)
-    {
-      cache_expired = 1;
-    }
-    else
-    {
-      cache_expired = 0;
-    }
+    strncpy(user_faked_time, tmp_env, BUFFERLEN);
+  }
+  else
+  {
+    // tp is always initialized to the real time, so just return immediately to not fake it.
+    return 0;
   }
 
-  if (cache_enabled == 0)
-  {
-    cache_expired = 1;
-  }
-
-  if (cache_expired == 1)
-  {
-    static char user_faked_time[BUFFERLEN]; /* changed to static for caching in v0.6 */
-    /* initialize with default or env. variable */
-    char *tmp_env;
-
-    /* Can be enabled for testing ...
-      fprintf(stderr, "***************++ Cache expired ++**************\n");
-    */
-
-    if (NULL != (tmp_env = getenv("FAKETIME")))
-    {
-      strncpy(user_faked_time, tmp_env, BUFFERLEN);
-    }
-    else
-    {
-      snprintf(user_faked_time, BUFFERLEN, "+0");
-    }
-
-    last_data_fetch = tp->tv_sec;
-    parse_ft_string(user_faked_time);
-  } /* cache had expired */
+  parse_ft_string(user_faked_time);
 
   if (infile_set)
   {
@@ -2098,6 +2045,8 @@ int clock_get_time(clock_serv_t clock_serv, mach_timespec_t *cur_timeclockid_t)
 {
   int result;
   struct timespec ts;
+
+  (void)(clock_serv);  // this param is now unused but is needed for the interface; don't throw a warning
 
   /*
    * Initialize our result with the real current time from CALENDAR_CLOCK.
