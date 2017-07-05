@@ -32,6 +32,10 @@ struct system_time_s
   struct timespec mon;
   /* System time according to CLOCK_MONOTONIC_RAW */
   struct timespec mon_raw;
+#ifdef CLOCK_BOOTTIME
+  /* System time according to CLOCK_BOOTTIME */
+  struct timespec boot;
+#endif
 };
 
 /* Data shared among faketime-spawned processes */
@@ -46,5 +50,12 @@ struct ft_shared_s
   /* System time Faketime started at */
   struct system_time_s start_time;
 };
+
+/* These are all needed in order to properly build on OSX */
+#ifdef __APPLE__
+#include <mach/clock.h>
+#include <mach/mach_host.h>
+#include <mach/mach_port.h>
+#endif
 
 #endif

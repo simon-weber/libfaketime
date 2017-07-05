@@ -63,9 +63,21 @@ extern char *__progname;
 #endif
 #else
 /* endianness related macros */
+#ifndef OSSwapHostToBigInt64
+#define OSSwapHostToBigInt64(x) ((uint64_t)(x))
+#endif
 #define htobe64(x) OSSwapHostToBigInt64(x)
+#ifndef OSSwapHostToLittleInt64
+#define OSSwapHostToLittleInt64(x) OSSwapInt64(x)
+#endif
 #define htole64(x) OSSwapHostToLittleInt64(x)
+#ifndef OSSwapBigToHostInt64
+#define OSSwapBigToHostInt64(x) ((uint64_t)(x))
+#endif
 #define be64toh(x) OSSwapBigToHostInt64(x)
+#ifndef OSSwapLittleToHostInt64
+#define OSSwapLittleToHostInt64(x) OSSwapInt64(x)
+#endif
 #define le64toh(x) OSSwapLittleToHostInt64(x)
 
 /* clock_gettime() and related clock definitions are missing on __APPLE__ */
@@ -128,7 +140,7 @@ static int          (*real___ftime)           (struct timeb *);
 static int          (*real___gettimeofday)    (struct timeval *, void *);
 static int          (*real___clock_gettime)   (clockid_t clk_id, struct timespec *tp);
 #endif
-#ifndef __APPLE__
+#ifndef __APPLEOSX__
 #ifdef FAKE_TIMERS
 static int          (*real_timer_settime_22)   (int timerid, int flags, const struct itimerspec *new_value,
                                                 struct itimerspec * old_value);
@@ -148,9 +160,13 @@ static unsigned int (*real_sleep)           (unsigned int seconds);
 static unsigned int (*real_alarm)           (unsigned int seconds);
 static int          (*real_poll)            (struct pollfd *, nfds_t, int);
 static int          (*real_ppoll)           (struct pollfd *, nfds_t, const struct timespec *, const sigset_t *);
+static int          (*real_select)          (int nfds, fd_set *restrict readfds,
+                                             fd_set *restrict writefds,
+                                             fd_set *restrict errorfds,
+                                             struct timeval *restrict timeout);
 static int          (*real_sem_timedwait)   (sem_t*, const struct timespec*);
 #endif
-#ifdef __APPLE__
+#ifdef __APPLEOSX__
 static int          (*real_clock_get_time)  (clock_serv_t clock_serv, mach_timespec_t *cur_timeclockid_t);
 static int          apple_clock_gettime     (clockid_t clk_id, struct timespec *tp);
 static clock_serv_t clock_serv_real;
@@ -212,7 +228,11 @@ static int cache_duration = 10;     /* cache fake time input for 10 seconds */
  * Static timespec to store our startup time, followed by a load-time library
  * initialization declaration.
  */
+#ifndef CLOCK_BOOTTIME
 static struct system_time_s ftpl_starttime = {{0, -1}, {0, -1}, {0, -1}};
+#else
+static struct system_time_s ftpl_starttime = {{0, -1}, {0, -1}, {0, -1}, {0, -1}};
+#endif
 
 static char user_faked_time_fmt[BUFSIZ] = {0};
 
@@ -302,7 +322,7 @@ void ft_cleanup (void)
 /* Get system time from system for all clocks */
 static void system_time_from_system (struct system_time_s * systime)
 {
-#ifdef __APPLE__
+#ifdef __APPLEOSX__
   /* from http://stackoverflow.com/questions/5167269/clock-gettime-alternative-in-mac-os-x */
   clock_serv_t cclock;
   mach_timespec_t mts;
@@ -318,9 +338,16 @@ static void system_time_from_system (struct system_time_s * systime)
   systime->mon_raw.tv_sec = mts.tv_sec;
   systime->mon_raw.tv_nsec = mts.tv_nsec;
 #else
-  DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_REALTIME, &systime->real));
-  DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_MONOTONIC, &systime->mon));
-  DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_MONOTONIC_RAW, &systime->mon_raw));
+  DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_REALTIME, &systime->real))
+   ;
+  DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_MONOTONIC, &systime->mon))
+   ;
+  DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_MONOTONIC_RAW, &systime->mon_raw))
+   ;
+#ifdef CLOCK_BOOTTIME
+  DONT_FAKE_TIME((*real_clock_gettime)(CLOCK_BOOTTIME, &systime->boot))
+   ;
+#endif
 #endif
 }
 
@@ -992,6 +1019,52 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout)
   return ret;
 }
 
+/*
+ * Faked select()
+ */
+int select(int nfds, fd_set *readfds,
+           fd_set *writefds,
+           fd_set *errorfds,
+           struct timeval *timeout)
+{
+  int ret;
+  struct timeval timeout_real;
+
+  if (!initialized)
+  {
+    ftpl_init();
+  }
+
+  if (real_select == NULL)
+  {
+    return -1;
+  }
+
+  if (timeout != NULL)
+  {
+    if (user_rate_set && !dont_fake && (timeout->tv_sec > 0 || timeout->tv_usec > 0))
+    {
+      struct timespec ts;
+
+      ts.tv_sec = timeout->tv_sec;
+      ts.tv_nsec = timeout->tv_usec * 1000;
+
+      timespecmul(&ts, 1.0 / user_rate, &ts);
+
+      timeout_real.tv_sec = ts.tv_sec;
+      timeout_real.tv_usec = ts.tv_nsec / 1000;
+    }
+    else
+    {
+      timeout_real.tv_sec = timeout->tv_sec;
+      timeout_real.tv_usec = timeout->tv_usec;
+    }
+  }
+
+  DONT_FAKE_TIME(ret = (*real_select)(nfds, readfds, writefds, errorfds, timeout == NULL ? timeout : &timeout_real));
+  return ret;
+}
+
 int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout)
 {
   int result;
@@ -1560,6 +1633,7 @@ parse_modifiers:
 void ftpl_init(void)
 {
   char *tmp_env;
+  bool dont_fake_final;
 
 #ifdef __APPLE__
   const char *progname = getprogname();
@@ -1586,6 +1660,7 @@ void ftpl_init(void)
   real_alarm =              dlsym(RTLD_NEXT, "alarm");
   real_poll =               dlsym(RTLD_NEXT, "poll");
   real_ppoll =              dlsym(RTLD_NEXT, "ppoll");
+  real_select =             dlsym(RTLD_NEXT, "select");
   real_sem_timedwait =      dlsym(RTLD_NEXT, "sem_timedwait");
 #endif
 #ifdef FAKE_INTERNAL_CALLS
@@ -1593,7 +1668,7 @@ void ftpl_init(void)
   real___gettimeofday =       dlsym(RTLD_NEXT, "__gettimeofday");
   real___clock_gettime  =     dlsym(RTLD_NEXT, "__clock_gettime");
 #endif
-#ifdef __APPLE__
+#ifdef __APPLEOSX__
   real_clock_get_time =     dlsym(RTLD_NEXT, "clock_get_time");
   real_clock_gettime  =     apple_clock_gettime;
 #else
@@ -1623,6 +1698,8 @@ void ftpl_init(void)
 #endif
 #endif
 
+  dont_fake = true; // Do not fake times during initialization
+  dont_fake_final = false;
   initialized = 1;
 
   ft_shm_init();
@@ -1656,24 +1733,36 @@ void ftpl_init(void)
   /* We can prevent faking time for specified commands */
   if ((tmp_env = getenv("FAKETIME_SKIP_CMDS")) != NULL)
   {
-    char *skip_cmd, *saveptr;
-    skip_cmd = strtok_r(tmp_env, ",", &saveptr);
-    while (skip_cmd != NULL)
+    char *skip_cmd, *saveptr, *tmpvar;
+    /* Don't mess with the env variable directly. */
+    tmpvar = strdup(tmp_env);
+    if (tmpvar != NULL)
     {
-      if (0 == strcmp(progname, skip_cmd))
+      skip_cmd = strtok_r(tmpvar, ",", &saveptr);
+      while (skip_cmd != NULL)
       {
-        ft_mode = FT_NOOP;
-        dont_fake = true;
-        break;
+        if (0 == strcmp(progname, skip_cmd))
+        {
+          ft_mode = FT_NOOP;
+          dont_fake_final = true;
+          break;
+        }
+        skip_cmd = strtok_r(NULL, ",", &saveptr);
       }
-      skip_cmd = strtok_r(NULL, ",", &saveptr);
+      free(tmpvar);
+      tmpvar = NULL;
+    }
+    else
+    {
+      fprintf(stderr, "Error: Could not copy the environment variable value.\n");
+      exit(EXIT_FAILURE);
     }
   }
 
   /* We can limit faking time to specified commands */
   if ((tmp_env = getenv("FAKETIME_ONLY_CMDS")) != NULL)
   {
-    char *only_cmd, *saveptr;
+    char *only_cmd, *saveptr, *tmpvar;
     bool cmd_matched = false;
 
     if (getenv("FAKETIME_SKIP_CMDS") != NULL)
@@ -1682,21 +1771,29 @@ void ftpl_init(void)
       exit(EXIT_FAILURE);
     }
 
-    only_cmd = strtok_r(tmp_env, ",", &saveptr);
-    while (only_cmd != NULL)
-    {
-      if (0 == strcmp(progname, only_cmd))
+    /* Don't mess with the env variable directly. */
+    tmpvar = strdup(tmp_env);
+    if (tmpvar != NULL) {
+      only_cmd = strtok_r(tmpvar, ",", &saveptr);
+      while (only_cmd != NULL)
       {
-        cmd_matched = true;
-        break;
+        if (0 == strcmp(progname, only_cmd))
+        {
+          cmd_matched = true;
+          break;
+        }
+        only_cmd = strtok_r(NULL, ",", &saveptr);
       }
-      only_cmd = strtok_r(NULL, ",", &saveptr);
-    }
 
-    if (!cmd_matched)
-    {
-      ft_mode = FT_NOOP;
-      dont_fake = true;
+      if (!cmd_matched)
+      {
+        ft_mode = FT_NOOP;
+        dont_fake_final = true;
+      }
+      free(tmpvar);
+    } else {
+      fprintf(stderr, "Error: Could not copy the environment variable value.\n");
+      exit(EXIT_FAILURE);
     }
   }
 
@@ -1822,6 +1919,8 @@ void ftpl_init(void)
   {
     parse_ft_string(tmp_env);
   }
+
+  dont_fake = dont_fake_final;
 }
 
 
@@ -1875,14 +1974,25 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
     switch (clk_id)
     {
       case CLOCK_REALTIME:
+#ifdef CLOCK_REALTIME_COARSE
+      case CLOCK_REALTIME_COARSE:
+#endif
         timespecsub(tp, &ftpl_starttime.real, &tmp_ts);
         break;
       case CLOCK_MONOTONIC:
+#ifdef CLOCK_MONOTONIC_COARSE
+      case CLOCK_MONOTONIC_COARSE:
+#endif
         timespecsub(tp, &ftpl_starttime.mon, &tmp_ts);
         break;
       case CLOCK_MONOTONIC_RAW:
         timespecsub(tp, &ftpl_starttime.mon_raw, &tmp_ts);
         break;
+#ifdef CLOCK_BOOTTIME
+      case CLOCK_BOOTTIME:
+        timespecsub(tp, &ftpl_starttime.boot, &tmp_ts);
+        break;
+#endif
       default:
         printf("Invalid clock_id for clock_gettime: %d", clk_id);
         exit(EXIT_FAILURE);
@@ -1960,14 +2070,25 @@ int fake_clock_gettime(clockid_t clk_id, struct timespec *tp)
         switch (clk_id)
         {
           case CLOCK_REALTIME:
+#ifdef CLOCK_REALTIME_COARSE
+          case CLOCK_REALTIME_COARSE:
+#endif
             timespecsub(tp, &ftpl_starttime.real, &tdiff);
             break;
           case CLOCK_MONOTONIC:
+#ifdef CLOCK_MONOTONIC_COARSE
+          case CLOCK_MONOTONIC_COARSE:
+#endif
             timespecsub(tp, &ftpl_starttime.mon, &tdiff);
             break;
           case CLOCK_MONOTONIC_RAW:
             timespecsub(tp, &ftpl_starttime.mon_raw, &tdiff);
             break;
+#ifdef CLOCK_BOOTTIME
+          case CLOCK_BOOTTIME:
+            timespecsub(tp, &ftpl_starttime.boot, &tdiff);
+            break;
+#endif
           default:
             printf("Invalid clock_id for clock_gettime: %d", clk_id);
             exit(EXIT_FAILURE);
@@ -2016,7 +2137,7 @@ int fake_gettimeofday(struct timeval *tv)
  *      =======================================================================
  */
 
-#ifdef __APPLE__
+#ifdef __APPLEOSX__
 /*
  * clock_gettime implementation for __APPLE__
  * @note It always behave like being called with CLOCK_REALTIME.
