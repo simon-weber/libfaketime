@@ -1,7 +1,7 @@
 /*
  *  libfaketime wrapper command
  *
- *  This file is part of libfaketime, version 0.9.6
+ *  This file is part of libfaketime, version 0.9.7
  *
  *  libfaketime is free software; you can redistribute it and/or modify it
  *  under the terms of the GNU General Public License v2 as published by the
@@ -48,7 +48,7 @@
 
 #include "faketime_common.h"
 
-const char version[] = "0.9.6";
+const char version[] = "0.9.7";
 
 #ifdef __APPLE__
 static const char *date_cmd = "gdate";
@@ -209,7 +209,7 @@ int main (int argc, char **argv)
     int shm_fd;
     sem_t *sem;
     struct ft_shared_s *ft_shared;
-    char shared_objs[PATH_BUFSIZE];
+    char shared_objs[PATH_BUFSIZE * 2 + 1];
 
     /*
      * Casting of getpid() return value to long needed to make GCC on SmartOS
@@ -286,7 +286,7 @@ int main (int argc, char **argv)
       exit(EXIT_FAILURE);
     }
 
-    snprintf(shared_objs, PATH_BUFSIZE, "%s %s", sem_name, shm_name);
+    snprintf(shared_objs, sizeof(shared_objs), "%s %s", sem_name, shm_name);
     setenv("FAKETIME_SHARED", shared_objs, true);
     sem_close(sem);
   }

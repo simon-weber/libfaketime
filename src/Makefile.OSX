@@ -14,7 +14,7 @@
 #
 #     PTHREAD_SINGLETHREADED_TIME
 #         - Define this if you want to single-thread time() ... there ARE
-#           possibile caching side-effects in a multithreaded environment
+#           possible caching side-effects in a multithreaded environment
 #           without this, but the performance impact may require you to
 #           try it unsynchronized.
 #
@@ -39,7 +39,7 @@ INSTALL ?= install
 PREFIX ?= /usr/local
 
 CFLAGS += -DFAKE_SLEEP -DFAKE_INTERNAL_CALLS -DPREFIX='"'${PREFIX}'"'
-LIB_LDFLAGS += -dynamiclib -current_version 0.9.6 -compatibility_version 0.7
+LIB_LDFLAGS += -dynamiclib -current_version 0.9.7 -compatibility_version 0.7
 
 SONAME = 1
 LIBS = libfaketime.${SONAME}.dylib
